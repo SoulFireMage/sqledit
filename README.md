@@ -1,5 +1,5 @@
 # sqlshell
-
+***DeepSeek 4.1 Experimental Work - Use with suitable caution. Old school ide for sql :P***
 `sqlshell` is a resilient terminal client and full-screen terminal IDE for
 Microsoft SQL Server. It owns a persistent pyodbc connection, detects common
 connection-loss errors, reconnects using the selected profile, and retries the
