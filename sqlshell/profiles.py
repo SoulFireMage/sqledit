@@ -12,7 +12,13 @@ from typing import Callable
 import keyring
 
 SERVICE_NAME = "sqlshell"
-AUTH_TYPES = ("sql", "windows", "entra")
+AUTH_TYPES = ("sql", "windows", "entra", "none")
+ENGINES = ("mssql", "postgres")
+ENGINE_AUTH_TYPES = {"mssql": ("sql", "windows", "entra"), "postgres": ("sql", "none")}
+ENGINE_DEFAULTS = {
+    "mssql": {"database": "master", "port": None, "auth": "windows"},
+    "postgres": {"database": "postgres", "port": 5432, "auth": "sql"},
+}
 
 
 class ProfileError(ValueError):
@@ -24,6 +30,8 @@ class Profile:
     name: str
     server: str
     database: str = "master"
+    engine: str = "mssql"
+    port: int | None = None
     auth: str = "windows"
     username: str | None = None
     driver: str = "ODBC Driver 18 for SQL Server"
@@ -37,10 +45,17 @@ class Profile:
             raise ProfileError("Profile name must be non-empty and cannot contain brackets or newlines")
         if not self.server:
             raise ProfileError("Server is required")
-        if self.auth not in AUTH_TYPES:
-            raise ProfileError(f"Unknown authentication type: {self.auth}")
+        if self.engine not in ENGINES:
+            raise ProfileError(f"Unknown database engine: {self.engine} (choose from {', '.join(ENGINES)})")
+        allowed = ENGINE_AUTH_TYPES[self.engine]
+        if self.auth not in allowed:
+            raise ProfileError(
+                f"Authentication '{self.auth}' is not available for {self.engine}; choose from {', '.join(allowed)}"
+            )
         if self.auth == "sql" and not self.username:
             raise ProfileError("SQL authentication requires a username")
+        if self.port is not None and not 1 <= self.port <= 65535:
+            raise ProfileError("Port must be between 1 and 65535")
         if self.login_timeout < 1 or self.query_timeout < 0:
             raise ProfileError("Timeouts cannot be negative (login timeout must be at least 1)")
 
@@ -197,21 +212,39 @@ def prompt_for_profile(name: str, input_fn: Callable[[str], str] = input, passwo
     import getpass
 
     password_fn = password_fn or getpass.getpass
+    engine = input_fn("Engine (mssql/postgres) [mssql]: ").strip().lower() or "mssql"
+    if engine not in ENGINES:
+        raise ProfileError(f"Unknown database engine: {engine} (choose from {', '.join(ENGINES)})")
+    defaults = ENGINE_DEFAULTS[engine]
+    auth_types = ENGINE_AUTH_TYPES[engine]
     server = input_fn("Server: ").strip()
-    database = input_fn("Database [master]: ").strip() or "master"
-    auth = input_fn("Authentication (sql/windows/entra) [windows]: ").strip().lower() or "windows"
+    port_answer = input_fn(f"Port [{defaults['port'] or 'driver default'}]: ").strip()
+    if port_answer and not port_answer.isdigit():
+        raise ProfileError("Port must be a whole number")
+    database = input_fn(f"Database [{defaults['database']}]: ").strip() or defaults["database"]
+    auth = input_fn(f"Authentication ({'/'.join(auth_types)}) [{defaults['auth']}]: ").strip().lower() or defaults["auth"]
     username = input_fn("Username: ").strip() if auth == "sql" else None
     password = password_fn("Password: ") if auth == "sql" else None
-    trust_answer = input_fn("Trust server certificate without validation? [y/N]: ").strip().lower()
-    if trust_answer not in ("", "n", "no", "y", "yes"):
-        raise ProfileError("Please answer yes or no for certificate trust")
+    def yes_no(question: str, default: bool) -> bool:
+        answer = input_fn(f"{question} [{'Y/n' if default else 'y/N'}]: ").strip().lower()
+        if answer not in ("", "n", "no", "y", "yes"):
+            raise ProfileError(f"Please answer yes or no for: {question}")
+        return default if not answer else answer in ("y", "yes")
+
+    # A PostgreSQL server often runs with ssl off, so the choice is worth asking
+    # here rather than leaving the first connection to fail on sslmode=verify-full.
+    encrypt = True if engine == "mssql" else yes_no("Encrypt the connection with TLS?", True)
+    trust = yes_no("Trust server certificate without validation?", False) if encrypt else False
     profile = Profile(
         name=name,
         server=server,
         database=database,
+        engine=engine,
+        port=int(port_answer) if port_answer else None,
         auth=auth,
         username=username,
-        trust_server_certificate=trust_answer in ("y", "yes"),
+        encrypt=encrypt,
+        trust_server_certificate=trust,
     )
     profile.validate()
     return profile, password

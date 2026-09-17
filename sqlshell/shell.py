@@ -10,14 +10,13 @@ from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.lexers import PygmentsLexer
-from pygments.lexers.sql import TransactSqlLexer
+from pygments.lexers.sql import PostgresLexer, TransactSqlLexer
 
 from . import __version__
 from .connection import ConnectionManager
 from .export import export_results, parse_redirection
 from .profiles import ProfileError, ProfileStore
 from .render import Renderer
-from .scripts import split_batches
 
 COMMANDS = [".connect", ".run", ".save", ".edit", ".history", ".help", ".exit"]
 
@@ -33,9 +32,12 @@ class SqlShell:
             history=FileHistory(str(history_path)),
             auto_suggest=AutoSuggestFromHistory(),
             completer=WordCompleter(COMMANDS, sentence=True),
-            lexer=PygmentsLexer(TransactSqlLexer),
+            lexer=PygmentsLexer(self._lexer()),
         )
         self.last_sql: str | None = None
+
+    def _lexer(self):
+        return PostgresLexer if self.manager.engine.name == "postgres" else TransactSqlLexer
 
     def run(self) -> None:
         self.renderer.console.print(f"sqlshell {__version__} — .help for commands", style="bold cyan")
@@ -80,7 +82,7 @@ class SqlShell:
         except OSError as exc:
             self.renderer.error(exc)
             return False
-        batches = split_batches(script)
+        batches = self.manager.engine.split_batches(script)
         if not batches:
             self.renderer.event("error", f"No SQL found in {path}")
             return False

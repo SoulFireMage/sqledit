@@ -37,6 +37,14 @@ def test_export_csv_quotes_values_and_formats_null_and_bytes(tmp_path):
         ]
 
 
+def test_export_formats_a_psycopg_memoryview_like_bytes(tmp_path):
+    path = tmp_path / "results.csv"
+    result = ResultSet(["payload"], [(memoryview(bytes([1, 255])),)])
+    export_results([result], path)
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        assert list(csv.reader(handle))[1] == ["0x01ff"]
+
+
 def test_append_does_not_repeat_header(tmp_path):
     path = tmp_path / "results.csv"
     result = ResultSet(["value"], [(1,)])

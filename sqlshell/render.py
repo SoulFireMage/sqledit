@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from typing import Iterable
 
@@ -45,8 +46,13 @@ class Renderer:
     def _format(value) -> str | Text:
         if value is None:
             return Text("NULL", style="dim italic")
-        if isinstance(value, bytes):
-            return "0x" + value.hex()
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            # psycopg returns bytea as memoryview; pyodbc returns bytes.
+            return "0x" + bytes(value).hex()
+        if isinstance(value, (dict, list)):
+            # psycopg decodes json and jsonb into Python objects; show them as JSON
+            # rather than as a repr with single quotes.
+            return json.dumps(value, default=str)
         return str(value)
 
     def error(self, error: BaseException) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -68,8 +69,12 @@ def _export_row(row: tuple) -> list[str]:
     for value in row:
         if value is None:
             values.append("")
-        elif isinstance(value, bytes):
-            values.append("0x" + value.hex())
+        elif isinstance(value, (bytes, bytearray, memoryview)):
+            # psycopg returns bytea as memoryview; pyodbc returns bytes.
+            values.append("0x" + bytes(value).hex())
+        elif isinstance(value, (dict, list)):
+            # psycopg decodes json and jsonb into Python objects.
+            values.append(json.dumps(value, default=str))
         else:
             values.append(str(value))
     return values

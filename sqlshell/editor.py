@@ -31,7 +31,6 @@ from textual.widgets.text_area import Selection
 from .connection import ConnectionManager, ResultSet
 from .export import export_results
 from .profiles import ProfileStore
-from .scripts import current_batch
 
 
 class TextPrompt(ModalScreen[str | None]):
@@ -391,7 +390,8 @@ class SqlIdeApp(App[None]):
         self._update_status()
         profile = self.manager.profile
         if profile:
-            self._log("connected", f"Connected: {profile.name} — {profile.server}/{profile.database}")
+            target = self.manager.engine.describe_target(profile)
+            self._log("connected", f"Connected: {profile.name} — {target} ({profile.engine})")
         self.query_one("#editor", TextArea).focus()
 
     @property
@@ -426,8 +426,9 @@ class SqlIdeApp(App[None]):
 
     def action_run_batch(self) -> None:
         editor = self.query_one("#editor", TextArea)
-        sql = current_batch(editor.text, editor.cursor_location[0])
-        self._start_query(sql, "current GO batch")
+        engine = self.manager.engine
+        sql = engine.current_batch(editor.text, editor.cursor_location[0])
+        self._start_query(sql, f"current {engine.batch_label()}")
 
     def _start_query(self, sql: str, label: str) -> None:
         if self.query_running:
@@ -683,7 +684,7 @@ class SqlIdeApp(App[None]):
     def action_menu_query(self) -> None:
         self._open_menu("Query", [
             ("Execute selection/buffer    F5", "run_query"),
-            ("Execute current GO batch    Shift+F5", "run_batch"),
+            ("Execute current batch       Shift+F5", "run_batch"),
             ("Focus results               F6", "toggle_results"),
         ])
 

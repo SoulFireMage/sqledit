@@ -1,9 +1,13 @@
 # sqlshell
 ***DeepSeek 4.1 Experimental Work - Use with suitable caution. Old school ide for sql :P***
 `sqlshell` is a resilient terminal client and full-screen terminal IDE for
-Microsoft SQL Server. It owns a persistent pyodbc connection, detects common
-connection-loss errors, reconnects using the selected profile, and retries the
-interrupted command once.
+Microsoft SQL Server and PostgreSQL. It owns a persistent connection, detects
+common connection-loss errors, reconnects using the selected profile, and
+retries the interrupted command once.
+
+Each profile names the engine it talks to: `mssql` connects through pyodbc, and
+`postgres` connects through psycopg. Everything else — profiles, the shell, the
+IDE, exports, and reconnection — is shared.
 
 It provides two interfaces over the same profiles and connection engine:
 
@@ -16,7 +20,8 @@ The current IDE release is `2.0.0b2`. The remaining work required for stable
 ## Requirements
 
 - Python 3.11 or newer.
-- Microsoft ODBC Driver 17 or 18 for SQL Server.
+- Microsoft ODBC Driver 17 or 18 for SQL Server, for `mssql` profiles.
+- `psycopg` (installed with the `postgres` extra), for `postgres` profiles.
 - Windows Terminal, PowerShell, or another terminal with ANSI colour support.
 - Network access to the SQL Server, including any required VPN connection.
 
@@ -26,6 +31,9 @@ Check the local environment at any time:
 python -m sqlshell doctor
 python -m sqlshell --version
 ```
+
+`doctor` reports the installed SQL Server ODBC drivers and the PostgreSQL
+driver, and is satisfied when at least one of them is present.
 
 ## Installation
 
@@ -39,6 +47,12 @@ Install the optional full-screen IDE dependencies:
 
 ```powershell
 python -m pip install -e ".[ide]"
+```
+
+Install PostgreSQL support:
+
+```powershell
+python -m pip install -e ".[postgres]"
 ```
 
 For development, including the automated test dependencies:
@@ -61,6 +75,9 @@ python -m sqlshell profile add work
 python -m sqlshell profile use work
 ```
 
+`profile add` asks for the engine first (`mssql` or `postgres`) and then offers
+the defaults that suit it, such as port 5432 and the `postgres` database.
+
 Launch the interactive shell using the active profile, or name one explicitly:
 
 ```powershell
@@ -76,10 +93,10 @@ python -m sqlshell edit -p work
 
 ## Connection profiles
 
-Profile metadata contains the server, database, authentication type, username,
-driver, TLS choices, and timeouts. SQL-authentication passwords are stored in
-the operating-system credential manager through `keyring`; they are never
-written to the profile file.
+Profile metadata contains the engine, server, optional port, database,
+authentication type, username, driver, TLS choices, and timeouts.
+SQL-authentication passwords are stored in the operating-system credential
+manager through `keyring`; they are never written to the profile file.
 
 ### Create a profile
 
@@ -87,9 +104,32 @@ written to the profile file.
 python -m sqlshell profile add work
 ```
 
-The command prompts for the server, default database, authentication mode
-(`sql`, `windows`, or `entra`), SQL credentials when applicable, and the server
-certificate trust choice.
+The command prompts for the engine, server, port, default database,
+authentication mode, credentials when applicable, and the TLS choices. A
+PostgreSQL profile is asked whether to encrypt at all, because many servers,
+including the stock `postgres` Docker image, run with `ssl` off.
+
+Authentication modes depend on the engine:
+
+| Engine | Modes | Default port | Default database |
+|---|---|---|---|
+| `mssql` | `sql`, `windows`, `entra` | driver default (1433) | `master` |
+| `postgres` | `sql`, `none` | 5432 | `postgres` |
+
+`sql` means a username and password held in the credential manager; `none` suits
+a PostgreSQL server that trusts the connection without a password.
+
+A PostgreSQL profile can be created in one step from an existing one, or edited
+directly:
+
+```powershell
+python -m sqlshell profile edit home --engine postgres --server 192.168.0.94 --port 5432 --database mydb --auth sql --username postgres --no-encrypt
+python -m sqlshell profile edit home --password
+```
+
+`--no-encrypt` maps to `sslmode=disable`. With encryption on, a profile that
+validates the certificate uses `sslmode=verify-full`, and
+`--trust-server-certificate` uses `sslmode=require`.
 
 ### List and select profiles
 
@@ -126,6 +166,8 @@ Settings can also be changed without stepping through every prompt:
 
 ```powershell
 python -m sqlshell profile edit work --server sql01
+python -m sqlshell profile edit work --engine postgres
+python -m sqlshell profile edit work --port 5432
 python -m sqlshell profile edit work --database Reporting
 python -m sqlshell profile edit work --username richard
 python -m sqlshell profile edit work --auth sql
@@ -140,7 +182,8 @@ python -m sqlshell profile edit work --validate-server-certificate
 ```
 
 A query timeout of `0` means unlimited. Multiple edit options can be supplied in
-one command.
+one command. To clear a port and return to the driver default, use the
+interactive `profile edit NAME` and leave the port blank.
 
 ### Replace a SQL-authentication password
 
@@ -161,6 +204,9 @@ python -m sqlshell profile remove work
 Removing a SQL-authentication profile also removes its saved credential.
 
 ## TLS certificates and ODBC Driver 18
+
+This section describes `mssql` profiles; the PostgreSQL equivalents are the
+`sslmode` mappings described under *Create a profile*.
 
 ODBC Driver 18 enables encrypted connections and certificate validation by
 default. The preferred solution for an internal or privately issued SQL Server
@@ -192,23 +238,26 @@ python -m sqlshell
 ```
 
 Anything not beginning with `.` is executed as SQL. The prompt provides command
-history, up-arrow recall, automatic suggestions, and T-SQL highlighting.
+history, up-arrow recall, automatic suggestions, and syntax highlighting that
+follows the profile's engine (T-SQL or PostgreSQL).
 
 ### Dot-commands
 
 | Command | Description |
 |---|---|
 | `.connect PROFILE` | Switch to another saved profile. |
-| `.run FILE.sql` | Execute a UTF-8 SQL script as `GO`-delimited batches. |
+| `.run FILE.sql` | Execute a UTF-8 SQL script, batch by batch. |
 | `.save FILE.sql` | Save the most recently executed query. |
 | `.edit [FILE.sql]` | Open the full-screen IDE using the live connection. |
 | `.history` | Display command history. |
 | `.help` | Display shell help and export syntax. |
 | `.exit` | Close the shell. Ctrl+D also exits. |
 
-Script files are split on lines containing `GO`, with optional repetition using
-`GO N`. Errors and results are reported for each batch, and later batches still
-run after an earlier batch fails.
+On SQL Server, script files are split on lines containing `GO`, with optional
+repetition using `GO N`. On PostgreSQL they are split on semicolons that sit
+outside quoted text, dollar-quoted bodies such as function definitions, and
+comments. Errors and results are reported for each batch, and later batches
+still run after an earlier batch fails.
 
 ### Export query results
 
@@ -281,7 +330,7 @@ sql> .edit query.sql
 | F3 | Open a SQL file, protecting unsaved changes. |
 | F4 | Switch connection profile. |
 | F5 or Ctrl+Enter | Execute selected SQL, or the complete buffer when nothing is selected. |
-| Shift+F5 | Execute the `GO`-delimited batch containing the cursor. |
+| Shift+F5 | Execute the batch containing the cursor: a `GO` batch on SQL Server, a statement on PostgreSQL. |
 | F6 | Toggle focus between the editor and result grid. |
 | F8 | Export the active result set to CSV or TSV. |
 | F9 | Toggle between Turbo blue and modern dark themes. |
@@ -309,9 +358,11 @@ the Search menu wraps around the document.
 
 ## Connection resilience
 
-The connection manager treats common ODBC connection-loss and timeout states as
-transient. It reports the loss, reconnects using the selected profile, reports
-successful reconnection, and retries the interrupted SQL command once.
+The connection manager treats common connection-loss and timeout states as
+transient: ODBC SQLSTATEs on SQL Server, and class 08 and 57P0x conditions, a
+dropped socket, or a shutdown server on PostgreSQL. It reports the loss,
+reconnects using the selected profile, reports successful reconnection, and
+retries the interrupted SQL command once.
 
 Syntax, permission, and other SQL errors are not retried. Because the original
 outcome of a command can be uncertain after a network failure, use care with

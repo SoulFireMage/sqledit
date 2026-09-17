@@ -12,13 +12,24 @@ from rich.table import Table
 
 from . import __version__
 from .connection import ConnectionManager
-from .profiles import AUTH_TYPES, Profile, ProfileError, ProfileStore, prompt_for_profile
+from .engines import get_engine
+from .profiles import (
+    AUTH_TYPES,
+    ENGINE_AUTH_TYPES,
+    ENGINES,
+    Profile,
+    ProfileError,
+    ProfileStore,
+    prompt_for_profile,
+)
 from .render import Renderer
 from .shell import SqlShell
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(prog="sqlshell", description="Resilient SQL Server terminal client")
+    result = argparse.ArgumentParser(
+        prog="sqlshell", description="Resilient SQL Server and PostgreSQL terminal client"
+    )
     result.add_argument("--version", action="version", version=f"sqlshell {__version__}")
     result.add_argument("-p", "--profile", help="connection profile name")
     result.add_argument("-f", "--file", help="execute a SQL file and exit")
@@ -44,6 +55,8 @@ def parser() -> argparse.ArgumentParser:
     edit.add_argument("--password", action="store_true", help="securely prompt for a replacement password")
     edit.add_argument("--server", help="new server name or address")
     edit.add_argument("--database", help="new default database")
+    edit.add_argument("--engine", choices=ENGINES, help="new database engine")
+    edit.add_argument("--port", type=int, help="new server port")
     edit.add_argument("--username", help="new SQL-authentication username")
     edit.add_argument("--auth", choices=AUTH_TYPES, help="new authentication mode")
     edit.add_argument("--driver", help="new ODBC driver name")
@@ -69,7 +82,7 @@ def parser() -> argparse.ArgumentParser:
         action="store_false",
         help="require a certificate chaining to a trusted CA (default)",
     )
-    sub.add_parser("doctor", help="check Python and installed ODBC drivers")
+    sub.add_parser("doctor", help="check Python and the installed database drivers")
     return result
 
 
@@ -83,9 +96,10 @@ def profile_command(args, store: ProfileStore, console: Console) -> int:
             active = store.get().name
         except ProfileError:
             active = None
-        table = Table("", "Name", "Server", "Database", "Auth")
+        table = Table("", "Name", "Engine", "Server", "Database", "Auth")
         for item in store.list():
-            table.add_row("*" if item.name == active else "", item.name, item.server, item.database, item.auth)
+            server = item.server if item.port is None else f"{item.server}:{item.port}"
+            table.add_row("*" if item.name == active else "", item.name, item.engine, server, item.database, item.auth)
         console.print(table)
     elif args.profile_command == "show":
         profile = store.get(args.name)
@@ -100,6 +114,8 @@ def profile_command(args, store: ProfileStore, console: Console) -> int:
         changes = {
             "server": args.server,
             "database": args.database,
+            "engine": args.engine,
+            "port": args.port,
             "username": args.username,
             "auth": args.auth,
             "driver": args.driver,
@@ -135,14 +151,17 @@ def _show_profile(profile: Profile, store: ProfileStore, console: Console) -> No
     password_status = "not used"
     if profile.auth == "sql":
         password_status = "stored in credential manager" if store.password(profile) is not None else "MISSING"
+    engine = get_engine(profile.engine)
     rows = [
         ("Name", profile.name),
+        ("Engine", f"{profile.engine} ({engine.label})"),
         ("Server", profile.server),
+        ("Port", str(profile.port) if profile.port is not None else "driver default"),
         ("Database", profile.database),
         ("Authentication", profile.auth),
         ("Username", profile.username or "—"),
         ("Password", password_status),
-        ("ODBC driver", profile.driver),
+        ("Driver", profile.driver if profile.engine == "mssql" else "psycopg"),
         ("Encrypt", "yes" if profile.encrypt else "no"),
         ("Trust server certificate", "yes" if profile.trust_server_certificate else "no"),
         ("Login timeout", f"{profile.login_timeout} seconds"),
@@ -171,15 +190,22 @@ def _interactive_profile_changes(profile: Profile) -> dict:
             return False
         raise ProfileError(f"Please answer yes or no for {label.lower()}")
 
+    engine = text_value("Engine (mssql/postgres)", profile.engine).lower()
+    if engine not in ENGINES:
+        raise ProfileError(f"Unknown database engine: {engine} (choose from {', '.join(ENGINES)})")
     server = text_value("Server", profile.server)
+    port_text = text_value("Port (blank for the driver default)", str(profile.port) if profile.port else "")
+    if port_text and not port_text.isdigit():
+        raise ProfileError("Port must be a whole number")
     database = text_value("Database", profile.database)
-    auth = text_value("Authentication (sql/windows/entra)", profile.auth).lower()
-    if auth not in AUTH_TYPES:
-        raise ProfileError(f"Unknown authentication type: {auth}")
+    auth_types = ENGINE_AUTH_TYPES[engine]
+    auth = text_value(f"Authentication ({'/'.join(auth_types)})", profile.auth).lower()
+    if auth not in auth_types:
+        raise ProfileError(f"Authentication '{auth}' is not available for {engine}")
     username = profile.username
     if auth == "sql":
         username = text_value("Username", profile.username or "")
-    driver = text_value("ODBC driver", profile.driver)
+    driver = text_value("ODBC driver (SQL Server only)", profile.driver)
     encrypt = bool_value("Encrypt connection", profile.encrypt)
     trust = bool_value("Trust server certificate without validation", profile.trust_server_certificate)
     try:
@@ -188,7 +214,9 @@ def _interactive_profile_changes(profile: Profile) -> dict:
     except ValueError as exc:
         raise ProfileError("Timeouts must be whole numbers") from exc
     return {
+        "engine": engine,
         "server": server,
+        "port": int(port_text) if port_text else None,
         "database": database,
         "auth": auth,
         "username": username,
@@ -205,6 +233,8 @@ def doctor(console: Console) -> int:
     sql_drivers = [item for item in drivers if "ODBC Driver" in item and "SQL Server" in item]
     console.print(f"Python: {sys.version.split()[0]}")
     console.print("SQL Server ODBC drivers: " + (", ".join(sql_drivers) or "none"))
+    postgres_driver = _postgres_driver()
+    console.print(f"PostgreSQL driver: {postgres_driver or 'none'}")
     try:
         import textual
 
@@ -212,10 +242,34 @@ def doctor(console: Console) -> int:
     except ImportError:
         console.print('Terminal IDE: not installed (install with "sqlshell[ide]")')
     if not sql_drivers:
-        console.print("Install Microsoft ODBC Driver 18 for SQL Server.", style="bold red")
+        console.print(
+            "No SQL Server driver: install Microsoft ODBC Driver 18 for SQL Server.",
+            style="yellow" if postgres_driver else "bold red",
+        )
+    if not postgres_driver:
+        console.print(
+            'No PostgreSQL driver: run python -m pip install "sqlshell[postgres]".',
+            style="yellow" if sql_drivers else "bold red",
+        )
+    if not sql_drivers and not postgres_driver:
         return 1
     console.print("Environment is ready.", style="green")
     return 0
+
+
+def _postgres_driver() -> str | None:
+    try:
+        import psycopg
+
+        return f"psycopg {psycopg.__version__}"
+    except ImportError:
+        pass
+    try:
+        import psycopg2
+
+        return f"psycopg2 {psycopg2.__version__.split()[0]}"
+    except ImportError:
+        return None
 
 
 def main(argv: list[str] | None = None) -> int:

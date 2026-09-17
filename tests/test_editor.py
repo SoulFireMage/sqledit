@@ -5,6 +5,7 @@ from textual.widgets import DataTable, TextArea
 
 from sqlshell.connection import ResultSet
 from sqlshell.editor import FileBrowser, MenuPopup, SqlIdeApp, filter_file_paths
+from sqlshell.engines import engine_for
 from sqlshell.profiles import Profile
 
 
@@ -22,6 +23,7 @@ class FakeStore:
 class FakeManager:
     def __init__(self, store):
         self.profile = store.profile
+        self.engine = engine_for(store.profile)
         self.event = lambda *_args: None
         self.executed = []
 
@@ -31,6 +33,7 @@ class FakeManager:
 
     def connect(self, profile):
         self.profile = profile
+        self.engine = engine_for(profile)
         self.event("connected", f"Connected to {profile.name}")
 
 

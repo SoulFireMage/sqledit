@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sqlshell"
 version = "2.0.0b2"
-description = "A resilient terminal SQL Server client"
+description = "A resilient terminal SQL Server and PostgreSQL client"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -17,7 +17,8 @@ dependencies = [
 
 [project.optional-dependencies]
 ide = ["textual[syntax]>=1.0"]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "textual[syntax]>=1.0"]
+postgres = ["psycopg[binary]>=3.1"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "textual[syntax]>=1.0", "psycopg[binary]>=3.1"]
 
 [project.scripts]
 sqlshell = "sqlshell.main:main"
