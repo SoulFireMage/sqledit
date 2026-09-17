@@ -1,0 +1,29 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+artifacts/
+publish/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+
+# Test and coverage output
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+.nuget/
+
+# JetBrains Rider
+.idea/
+*.sln.iml

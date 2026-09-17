@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sqlshell"
+version = "2.0.0b2"
+description = "A resilient terminal SQL Server client"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "keyring>=24.0",
+    "prompt-toolkit>=3.0",
+    "pyodbc>=5.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+ide = ["textual[syntax]>=1.0"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "textual[syntax]>=1.0"]
+
+[project.scripts]
+sqlshell = "sqlshell.main:main"
+
+[tool.setuptools.packages.find]
+include = ["sqlshell*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

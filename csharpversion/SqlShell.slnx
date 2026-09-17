@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SqlShell.Cli/SqlShell.Cli.csproj" />
+    <Project Path="src/SqlShell.Core/SqlShell.Core.csproj" />
+    <Project Path="src/SqlShell.Ide/SqlShell.Ide.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SqlShell.Cli.Tests/SqlShell.Cli.Tests.csproj" />
+    <Project Path="tests/SqlShell.Core.Tests/SqlShell.Core.Tests.csproj" />
+    <Project Path="tests/SqlShell.Ide.Tests/SqlShell.Ide.Tests.csproj" />
+  </Folder>
+</Solution>
