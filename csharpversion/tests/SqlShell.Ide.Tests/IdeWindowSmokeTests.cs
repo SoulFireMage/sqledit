@@ -41,6 +41,9 @@ public class IdeWindowSmokeTests
             var output = window.SubViews.First(view => view.Id == "output");
             var status = window.SubViews.First(view => view.Id == "status");
 
+            var editorControl = Assert.IsType<Terminal.Gui.Editor.Editor>(editor);
+            Assert.Equal("TSQL", editorControl.HighlightingDefinition?.Name);
+
             Assert.True(
                 editor.Frame.Height > output.Frame.Height,
                 $"editor height {editor.Frame.Height} should exceed output height {output.Frame.Height}");

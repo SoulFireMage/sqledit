@@ -1,7 +1,7 @@
-#pragma warning disable CS0618 // TextView is deprecated in favour of tui-cs/Editor's EditorView; see IDE notes.
-
 using System.Diagnostics;
 using Terminal.Gui.App;
+using Terminal.Gui.Editor;
+using Terminal.Gui.Editor.Highlighting;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
@@ -9,6 +9,7 @@ using SqlShell.Core.Connection;
 using SqlShell.Core.Export;
 using SqlShell.Core.Profiles;
 using SqlShell.Core.Scripts;
+using EditorControl = Terminal.Gui.Editor.Editor;
 
 namespace SqlShell.Ide;
 
@@ -40,10 +41,10 @@ public sealed class IdeWindow : Window
 
     private MenuBar _menuBar = null!;
     private Label _title = null!;
-    private TextView _editor = null!;
+    private EditorControl _editor = null!;
     private Tabs _output = null!;
     private TableView _results = null!;
-    private TextView _messages = null!;
+    private EditorControl _messages = null!;
     private StatusBar _status = null!;
 
     private IReadOnlyList<ResultSet> _resultSets = [];
@@ -87,7 +88,8 @@ public sealed class IdeWindow : Window
             "connected" => "CONNECTED",
             _ => kind.ToUpperInvariant(),
         };
-        _messages.Text = (_messages.Text ?? string.Empty) + $"[{prefix}] {message}\n";
+        var document = _messages.Document!;
+        document.Insert(document.TextLength, $"[{prefix}] {message}\n");
     }
 
     private void BuildViews()
@@ -105,13 +107,15 @@ public sealed class IdeWindow : Window
             ]),
             new MenuBarItem("_Edit",
             [
-                new MenuItem("_Undo", "Ctrl+Z", () => _editor.Undo(), Key.Z.WithCtrl),
-                new MenuItem("_Redo", "Ctrl+Y", () => _editor.Redo(), Key.Y.WithCtrl),
+                new MenuItem("_Undo", "Ctrl+Z", () => _editor.Document!.UndoStack.Undo(), Key.Z.WithCtrl),
+                new MenuItem("_Redo", "Ctrl+Y", () => _editor.Document!.UndoStack.Redo(), Key.Y.WithCtrl),
                 new MenuItem("Select _all", "Ctrl+A", () => _editor.SelectAll(), Key.A.WithCtrl),
             ]),
             new MenuBarItem("_Search",
             [
                 new MenuItem("_Find...", "Ctrl+F", () => Find(), Key.F.WithCtrl),
+                new MenuItem("Find _next", "Ctrl+G", () => FindNext(), Key.G.WithCtrl),
+                new MenuItem("_Replace...", "Ctrl+H", () => ShowFindReplace(), Key.H.WithCtrl),
             ]),
             new MenuBarItem("_Query",
             [
@@ -138,7 +142,7 @@ public sealed class IdeWindow : Window
 
         _title = new Label { X = 0, Y = 1, Width = Dim.Fill(), Height = 1 };
 
-        _editor = new TextView
+        _editor = new EditorControl
         {
             Id = "editor",
             X = 0,
@@ -148,9 +152,14 @@ public sealed class IdeWindow : Window
             Multiline = true,
             WordWrap = false,
             ReadOnly = false,
+            GutterOptions = GutterOptions.LineNumbers,
+            IndentationSize = 4,
+            ConvertTabsToSpaces = true,
+            HighlightingDefinition = HighlightingManager.Instance.GetDefinition("TSQL"),
         };
-        _editor.TextChanged += (_, _) => RefreshTitle();
-        _editor.UnwrappedCursorPositionChanged += (_, _) => RefreshTitle();
+        _editor.ContentChanged += (_, _) => RefreshTitle();
+        _editor.CaretChanged += (_, _) => RefreshTitle();
+        _editor.SelectionChanged += (_, _) => RefreshTitle();
         _editor.KeyDown += (_, key) => OnKey(key);
 
         _results = new TableView
@@ -172,14 +181,17 @@ public sealed class IdeWindow : Window
         _results.NullSymbol = "NULL";
         _results.KeyDown += (_, key) => OnKey(key);
 
-        _messages = new TextView
+        _messages = new EditorControl
         {
+            Id = "messages",
             X = 0,
             Y = 0,
             Width = Dim.Fill(),
             Height = Dim.Fill(),
             ReadOnly = true,
+            Multiline = true,
             WordWrap = true,
+            GutterOptions = GutterOptions.None,
             Title = "Messages",
         };
         _messages.KeyDown += (_, key) => OnKey(key);
@@ -196,7 +208,8 @@ public sealed class IdeWindow : Window
 
         _status = new StatusBar(
         [
-            new Shortcut(Key.F1, "Help", () => Help(), "Keyboard reference"),            new Shortcut(Key.F2, "Save", () => Save(), "Save the buffer"),
+            new Shortcut(Key.F1, "Help", () => Help(), "Keyboard reference"),
+            new Shortcut(Key.F2, "Save", () => Save(), "Save the buffer"),
             new Shortcut(Key.F3, "Open", () => PromptOpen(), "Open a SQL file"),
             new Shortcut(Key.F5, "Run", () => RunQuery(), "Execute"),
             new Shortcut(Key.F6, "Focus", () => ToggleFocus(), "Toggle editor/results focus"),
@@ -294,6 +307,16 @@ public sealed class IdeWindow : Window
             Find();
             key.Handled = true;
         }
+        else if (key == Key.G.WithCtrl)
+        {
+            FindNext();
+            key.Handled = true;
+        }
+        else if (key == Key.H.WithCtrl)
+        {
+            ShowFindReplace();
+            key.Handled = true;
+        }
         else if (key == Key.Q.WithCtrl)
         {
             Quit();
@@ -312,9 +335,10 @@ public sealed class IdeWindow : Window
         var profile = _manager.Profile;
         var connection = profile is null ? "Disconnected" : $"{profile.Name} / {profile.Database}";
         var state = _running ? "Running..." : "Ready";
+        var location = _editor.Document!.GetLocation(_editor.CaretOffset);
         _title.Text =
             $" {_document.DisplayName}{marker}    |    {connection}    |    "
-            + $"Ln {_editor.CurrentRow + 1} Col {_editor.CurrentColumn + 1}    |    {state}    |    Limit: {_maxRows:N0} rows";
+            + $"Ln {location.Line} Col {location.Column}    |    {state}    |    Limit: {_maxRows:N0} rows";
     }
 
     private bool Confirm(string message)
@@ -412,7 +436,8 @@ public sealed class IdeWindow : Window
 
     private void RunBatch()
     {
-        var sql = BatchParser.CurrentBatch(_editor.Text ?? string.Empty, _editor.CurrentRow);
+        var cursorLine = _editor.Document!.GetLocation(_editor.CaretOffset).Line - 1;
+        var sql = BatchParser.CurrentBatch(_editor.Text ?? string.Empty, cursorLine);
         StartQuery(sql, "current GO batch");
     }
 
@@ -522,11 +547,24 @@ public sealed class IdeWindow : Window
         }
 
         _find.Text = input;
-        if (!_editor.FindNextText(_find.Text, out _, matchCase: false, matchWholeWord: false, textToReplace: string.Empty, replace: false))
+        FindNext();
+    }
+
+    private void FindNext()
+    {
+        if (string.IsNullOrEmpty(_find.Text))
+        {
+            Find();
+            return;
+        }
+
+        if (!_editor.FindNext(_find.Text, matchCase: false, wrapAround: true))
         {
             LogEvent("warning", $"Not found: {_find.Text}");
         }
     }
+
+    private void ShowFindReplace() => _app.Run(new FindReplaceDialog(_editor, selectReplaceTab: true), ReportDialogError);
 
     private void SwitchProfile()
     {
